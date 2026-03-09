@@ -1,102 +1,36 @@
-# 🧠 AI News Assistant
+# 🧠 AI News Intelligence Platform
 
-AI News Assistant is a real-time AI-powered web application that fetches the latest news articles and generates concise summaries to help users quickly understand current events without reading long articles.
+AI News Intelligence Platform is a **real-time AI-powered news dashboard** that aggregates global news and provides quick insights using lightweight NLP techniques.
 
-The application integrates NewsAPI for live news retrieval and provides an interactive Streamlit interface for exploring summarized news content.
+The platform retrieves live news from **NewsAPI** and automatically switches to **RSS feed fallback** when API rate limits are reached, ensuring uninterrupted access to news data.
+
+The application is built with **Python and Streamlit** and deployed on **Streamlit Community Cloud**.
 
 ---
 
-## 🚀 Live Demo
+# 🚀 Live Demo
 
-🌐 Live Application  
+### 🌐 Application
 https://ai-news-assistant.streamlit.app/
 
-📂 GitHub Repository  
+### 📁 GitHub Repository
 https://github.com/YuvarajOfl/ai-news-assistant
 
 ---
 
-## 📌 Features
+# 📌 Project Overview
 
-- Fetches real-time news articles using NewsAPI
-- Generates concise summaries of news content
-- Interactive Streamlit web interface
-- Topic-based news exploration
-- 24/7 deployed application on Streamlit Cloud
-- Lightweight and fast architecture
+This project demonstrates how **AI-powered news analysis platforms** can be built using lightweight Python tools.
 
----
+The system collects news from multiple sources and provides:
 
-## 🏗️ Project Architecture
+- summarized insights
+- sentiment indicators
+- categorized news browsing
+- trending headlines
+- reliable fallback mechanisms
 
-```
-User Request
-    ↓
-Streamlit Interface
-    ↓
-NewsAPI Request
-    ↓
-Article Retrieval
-    ↓
-Text Processing & Summarization
-    ↓
-Summarized News Display
-```
-
----
-
-## 🛠️ Tech Stack
-
-| Category | Technology |
-|---------|------------|
-| Language | Python |
-| Framework | Streamlit |
-| API | NewsAPI |
-| Data Processing | Python NLP Techniques |
-| Deployment | Streamlit Cloud |
-| Version Control | Git & GitHub |
-
----
-
-## ⚙️ Installation & Setup
-
-### 1️⃣ Clone the Repository
-
-```bash
-git clone https://github.com/YuvarajOfl/ai-news-assistant.git
-```
-
-### 2️⃣ Navigate into the Project Folder
-
-```bash
-cd ai-news-assistant
-```
-
-### 3️⃣ Install Dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-### 4️⃣ Run the Application
-
-```bash
-streamlit run app.py
-```
-
----
-
-## 🔑 Environment Variables
-
-Create a `.env` file and add your NewsAPI key:
-
-```
-NEWS_API_KEY=your_api_key_here
-```
-
-Get your free API key from:
-
-https://newsapi.org/
+The goal is to create a **fast, lightweight news intelligence dashboard** that allows users to quickly understand global events.
 
 ---
 
@@ -116,26 +50,191 @@ https://newsapi.org/
 
 ---
 
-## 📈 Future Improvements
+# ✨ Core Features
 
-Planned enhancements:
+### 📰 Real-Time News Aggregation
+Fetches live news articles using NewsAPI based on user queries.
 
-- AI-based sentiment analysis
-- Topic clustering for better news grouping
-- LLM-powered summarization
-- Personalized news recommendation system
-- User preference tracking
+### 🔄 RSS Feed Fallback
+Automatically switches to RSS feeds when NewsAPI rate limits are reached to ensure **continuous data availability**.
+
+### 🧠 Sentiment Tagging
+Uses lightweight NLP techniques to classify article tone:
+
+- Positive
+- Neutral
+- Negative
+
+### 📂 Category-Based Navigation
+Users can explore news across multiple domains:
+
+- General
+- Technology
+- Business
+- Science
+- Health
+- Sports
+- Entertainment
+- Gaming
+- Movies
+
+### ⚡ Quick Read Section
+A sidebar highlights trending headlines for fast scanning.
+
+### 🖼 Article Cards
+Each article is displayed as a visual card containing:
+
+- news image
+- headline
+- short summary
+- source
+- article link
+
+### ⚙ Adjustable Filters
+Users can:
+
+- search by topic
+- select categories
+- control the number of articles displayed
+
+### ☁️ Cloud Deployment
+The application is deployed and publicly accessible via Streamlit Cloud.
 
 ---
 
-## 🎯 Use Cases
+# 🏗 System Architecture
 
-This application can be used for:
+```
+User Query
+     │
+     ▼
+Streamlit Web Interface
+     │
+     ▼
+NewsAPI Request
+     │
+     ├── If Rate Limit Reached
+     ▼
+RSS Feed Fallback
+     │
+     ▼
+NLP Processing
+(Sentiment + Summary)
+     │
+     ▼
+Interactive News Dashboard
+```
 
-- Quick daily news summaries
-- Information overload reduction
-- Research and current affairs analysis
-- AI-powered information consumption tools
+---
+
+# 🧰 Technology Stack
+
+| Technology | Purpose |
+|------------|--------|
+| Python | Core application logic |
+| Streamlit | Web dashboard interface |
+| NewsAPI | Real-time news retrieval |
+| RSS Feeds | Backup data source |
+| NLP Techniques | Sentiment tagging |
+| REST APIs | Data integration |
+| GitHub | Version control |
+| Streamlit Cloud | Deployment platform |
+
+---
+
+# 📂 Project Structure
+
+```
+ai-news-assistant
+│
+├── app.py
+├── config.py
+├── requirements.txt
+├── README.md
+└── assets
+     └── dashboard.png
+```
+
+---
+
+# ⚙ Installation
+
+### 1️⃣ Clone Repository
+
+```bash
+git clone https://github.com/YuvarajOfl/ai-news-assistant.git
+```
+
+### 2️⃣ Navigate to Project
+
+```bash
+cd ai-news-assistant
+```
+
+### 3️⃣ Install Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### 4️⃣ Run Application
+
+```bash
+streamlit run app.py
+```
+
+---
+
+# 🔑 Environment Setup
+
+Create an environment variable for the NewsAPI key.
+
+```
+NEWS_API_KEY=your_api_key_here
+```
+
+You can obtain a free API key from:
+
+https://newsapi.org
+
+---
+
+# ☁️ Deployment
+
+The project is deployed on **Streamlit Community Cloud**.
+
+Deployment steps:
+
+1. Push project to GitHub  
+2. Connect repository to Streamlit Cloud  
+3. Add `NEWS_API_KEY` in Streamlit Secrets  
+4. Deploy the application  
+
+The platform becomes publicly accessible through a live URL.
+
+---
+
+# 💡 Use Cases
+
+This platform can be used for:
+
+- real-time news monitoring
+- quick news sentiment analysis
+- AI-assisted news summarization
+- lightweight data dashboard development
+- demonstrating API-based data products
+
+---
+
+# 📈 Future Improvements
+
+Potential enhancements include:
+
+- advanced AI summarization models
+- trending topic extraction
+- news analytics dashboard
+- topic recommendation system
+- user bookmarking and saved articles
 
 ---
 
@@ -149,16 +248,12 @@ Yuvaraj T
 
 ---
 
-## ⭐ Support
+# ⭐ Support
 
-If you found this project useful:
-
-- ⭐ Star the repository
-- 🍴 Fork the project
-- 📢 Share with others
+If you find this project useful, consider giving it a **star on GitHub** ⭐
 
 ---
 
-## 📜 License
+# 📜 License
 
-This project is licensed under the MIT License.
+This project is licensed under the **MIT License**.
