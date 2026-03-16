@@ -1,4 +1,4 @@
-# 🚀 AI News Assistant — DevOps Portfolio Project
+# 🚀 AI News Assistant — DevOps Portfolio Project 
 
 > **End-to-End CI/CD Pipeline** | Docker · GitHub Actions · DockerHub
 
