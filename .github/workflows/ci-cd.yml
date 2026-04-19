@@ -98,7 +98,7 @@ jobs:
           # 🔹 Run new container
           docker run -d \
             --name ai-news-app \
-            -p 8501:8501 \
+            -p 80:8501 \
             ${{ env.IMAGE_NAME }}:latest
 
           echo '✅ Deployment Completed!'
