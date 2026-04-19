@@ -563,56 +563,84 @@ def _parse_rss(url: str, limit: int = 10) -> list:
     except Exception:
         return []
 
-# ── FIX 2: og:image fetch for Google News RSS (which strips all images) ───────
-def _resolve_url(url: str) -> str:
-    """Follow redirects to get real article URL (Google News wraps links)."""
-    try:
-        r = requests.head(url, headers={"User-Agent":"Mozilla/5.0"}, timeout=5, allow_redirects=True)
-        return r.url if r.url else url
-    except Exception:
-        return url
+# ── FIX 2: Feed images — use curated RSS feeds (have embedded images) ─────────
+# Google News RSS strips all images and its article URLs are blocked by EC2.
+# Solution: fetch curated publisher feeds (BBC, TechCrunch, etc.) which embed
+# <media:content> images directly in the XML — no extra HTTP calls needed.
+# Then filter articles by keyword match against the search query.
 
-def _fetch_og_image(url: str) -> str:
-    """Fetch og:image / twitter:image meta tag from the real article page."""
-    try:
-        real = _resolve_url(url)   # follow Google News redirect first
-        r = requests.get(real, headers={"User-Agent":"Mozilla/5.0"}, timeout=6, allow_redirects=True)
-        if r.status_code != 200: return ""
-        chunk = r.text[:12000]     # only scan first 12KB — meta tags are in <head>
-        for pat in [
-            r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
-            r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
-            r'<meta[^>]+name=["\']twitter:image[^"\']*["\'][^>]+content=["\']([^"\']+)["\']',
-            r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+name=["\']twitter:image["\']',
-        ]:
-            m = re.search(pat, chunk, re.IGNORECASE)
-            if m:
-                img = m.group(1).strip()
-                if img.startswith("http"): return img
-    except Exception:
-        pass
-    return ""
+# All publisher feeds combined — used as the search corpus
+ALL_FEEDS = [
+    "http://feeds.bbci.co.uk/news/rss.xml",
+    "http://feeds.bbci.co.uk/news/technology/rss.xml",
+    "http://feeds.bbci.co.uk/news/business/rss.xml",
+    "http://feeds.bbci.co.uk/news/science_and_environment/rss.xml",
+    "http://feeds.bbci.co.uk/news/health/rss.xml",
+    "http://feeds.bbci.co.uk/sport/rss.xml",
+    "http://feeds.bbci.co.uk/news/entertainment_and_arts/rss.xml",
+    "https://feeds.feedburner.com/TechCrunch",
+    "https://www.wired.com/feed/rss",
+    "https://feeds.arstechnica.com/arstechnica/index",
+    "https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml",
+    "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml",
+    "https://rss.nytimes.com/services/xml/rss/nyt/Science.xml",
+    "https://feeds.npr.org/1001/rss.xml",
+    "https://www.sciencedaily.com/rss/top.xml",
+    "https://www.ign.com/articles.rss",
+    "https://variety.com/v/film/feed/",
+]
 
-def _enrich_images(articles: list) -> list:
-    """Parallel og:image fetch for articles missing images (6 threads at once)."""
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    needs  = [i for i, a in enumerate(articles) if not a.get("urlToImage")]
-    if not needs: return articles
-    result = articles[:]
-    with ThreadPoolExecutor(max_workers=6) as ex:
-        futs = {ex.submit(_fetch_og_image, articles[i]["url"]): i for i in needs}
-        for f in as_completed(futs):
-            idx = futs[f]
-            try:
-                img = f.result()
-                if img: result[idx] = {**result[idx], "urlToImage": img}
-            except Exception: pass
-    return result
+def _article_matches_query(article: dict, query: str) -> bool:
+    """
+    Check if an article is relevant to the search query.
+    Splits query into words and checks if ANY word appears in title or description.
+    Case-insensitive. Handles multi-word queries like 'Climate Change'.
+    """
+    query_words = [w.lower() for w in query.split() if len(w) > 2]
+    text = (
+        (article.get("title") or "") + " " +
+        (article.get("description") or "")
+    ).lower()
+    # Match if ANY query word is found in the article text
+    return any(w in text for w in query_words)
 
 def _rss_for_query(query: str, lang: str, limit: int) -> list:
-    """Google News RSS → parallel og:image enrichment."""
-    arts = _parse_rss(_google_news_rss(query, lang), limit=limit)
-    return _enrich_images(arts)
+    """
+    Search across curated RSS feeds by keyword matching.
+    These feeds embed images directly in XML — no extra HTTP requests needed.
+    Falls back to Google News RSS if not enough results found.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    all_articles = []
+    seen = set()
+
+    # Fetch multiple feeds in parallel for speed
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        futs = {ex.submit(_parse_rss, feed, 20): feed for feed in ALL_FEEDS}
+        for f in as_completed(futs):
+            try:
+                for art in f.result():
+                    if art["url"] not in seen:
+                        seen.add(art["url"])
+                        all_articles.append(art)
+            except Exception:
+                pass
+
+    # Filter by keyword relevance to the query
+    matched = [a for a in all_articles if _article_matches_query(a, query)]
+
+    # Sort by date (newest first)
+    def pub_key(a):
+        try: return datetime.fromisoformat(a.get("publishedAt","").replace("Z","+00:00"))
+        except: return datetime.min.replace(tzinfo=timezone.utc)
+    matched.sort(key=pub_key, reverse=True)
+
+    if len(matched) >= 3:
+        return matched[:limit]
+
+    # Fallback: Google News RSS if curated feeds had no matches
+    return _parse_rss(_google_news_rss(query, lang), limit=limit)
 
 def _rss_for_category(category: str, limit: int) -> list:
     """Pull from curated RSS feeds for a category."""
