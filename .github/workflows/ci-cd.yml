@@ -11,9 +11,6 @@ env:
 
 jobs:
 
-  # ─────────────────────────────────────────
-  # 🧪 JOB 1: Lint & Test
-  # ─────────────────────────────────────────
   test:
     name: 🧪 Lint & Test
     runs-on: ubuntu-latest
@@ -39,9 +36,6 @@ jobs:
           flake8 app/ --count --select=E9,F63,F7,F82 --show-source --statistics
           flake8 app/ --count --max-complexity=10 --max-line-length=127 --statistics || true
 
-  # ─────────────────────────────────────────
-  # 🐳 JOB 2: Build & Push Docker Image
-  # ─────────────────────────────────────────
   build-and-push:
     name: 🐳 Build & Push Docker Image
     runs-on: ubuntu-latest
@@ -68,9 +62,6 @@ jobs:
           tags: |
             ${{ env.IMAGE_NAME }}:latest
 
-  # ─────────────────────────────────────────
-  # 🚀 JOB 3: Deploy to EC2
-  # ─────────────────────────────────────────
   deploy:
     name: 🚀 Deploy to EC2
     runs-on: ubuntu-latest
@@ -104,9 +95,6 @@ jobs:
           echo '✅ Deployment Completed!'
           "
 
-  # ─────────────────────────────────────────
-  # 📋 JOB 4: Summary
-  # ─────────────────────────────────────────
   summary:
     name: 📋 Pipeline Summary
     runs-on: ubuntu-latest
