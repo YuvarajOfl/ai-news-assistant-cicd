@@ -373,31 +373,10 @@ def db_count():
 # ─────────────────────────────────────────────────────────────────────────────
 def esc(s): return str(s).replace("&","&amp;").replace("<","&lt;").replace('"','&quot;')
 
-# ── FIX 1: HTML entity decoder — fixes &lt;a href=... showing as raw text ─────
-def _decode_html(text: str) -> str:
-    """Decode HTML entities and strip all tags. Fixes &lt;a href=... in descriptions."""
-    if not text: return ""
-    # Decode named entities
-    text = (text.replace("&lt;","<").replace("&gt;",">").replace("&amp;","&")
-                .replace("&quot;",'"').replace("&#39;","'").replace("&nbsp;"," ")
-                .replace("&mdash;","—").replace("&ndash;","–")
-                .replace("&lsquo;","'").replace("&rsquo;","'")
-                .replace("&ldquo;",'"').replace("&rdquo;",'"'))
-    # Decode numeric entities like &#8216; &#8217; &#8220; &#8221;
-    text = re.sub(r"&#(\d+);",         lambda m: chr(int(m.group(1))),             text)
-    text = re.sub(r"&#x([0-9a-fA-F]+);", lambda m: chr(int(m.group(1), 16)),       text)
-    # Strip all remaining HTML tags (e.g. <a href=...>, <p>, <br>)
-    text = re.sub(r"<[^>]+>", "", text)
-    # Remove any raw URLs that leaked into descriptions
-    text = re.sub(r"https?://\S+", "", text)
-    # Collapse whitespace
-    return re.sub(r"\s+", " ", text).strip()
-
 def summarize(text):
     if not text: return "No description available."
-    text = _decode_html(text)                               # ← decode before displaying
     text = re.sub(r"\s*\[\+\d+ chars\]$","",text).strip()
-    s = [x.strip() for x in re.split(r"(?<=[.!?])\s+",text) if len(x.strip()) > 10]
+    s = [x.strip() for x in re.split(r"(?<=[.!?])\s+",text) if x.strip()]
     return " ".join(s[:2]) or "No description available."
 
 def fmt_date(iso):
@@ -444,7 +423,7 @@ def _mark_limited():
 def _is_limited() -> bool:
     if not st.session_state.api_limited: return False
     if st.session_state.api_limit_until and datetime.utcnow() > st.session_state.api_limit_until:
-        st.session_state.api_limited     = False
+        st.session_state.api_limited     = False   # auto-reset after 1 hour
         st.session_state.api_limit_until = None
         return False
     return True
@@ -486,12 +465,20 @@ RSS_FEEDS = {
                       "https://deadline.com/feed/"],
 }
 
+# Topic → RSS search via Google News RSS (no key)
 def _google_news_rss(query: str, lang: str = "en") -> str:
     q = requests.utils.quote(query)
     return f"https://news.google.com/rss/search?q={q}&hl={lang}&gl=US&ceid=US:{lang}"
 
 def _extract_image(item_xml: str, article_url: str) -> str:
-    """Try 3 methods to find an image URL in an RSS item."""
+    """
+    Try 3 methods to find an image for an RSS item:
+      1. media:content or media:thumbnail (most feeds)
+      2. enclosure tag
+      3. <img> inside description HTML
+    Returns image URL string or "".
+    """
+    # 1. media:content / media:thumbnail
     for pattern in [
         r'<media:content[^>]+url=["\']([^"\']+)["\']',
         r'<media:thumbnail[^>]+url=["\']([^"\']+)["\']',
@@ -502,12 +489,14 @@ def _extract_image(item_xml: str, article_url: str) -> str:
             url = m.group(1).strip().strip('"\'')
             if url.startswith("http"): return url
 
+    # 2. enclosure tag (url attribute)
     m = re.search(r'<enclosure[^>]+url=["\']([^"\']+)["\']', item_xml, re.IGNORECASE)
     if m:
         url = m.group(1).strip()
         if url.startswith("http") and any(ext in url.lower() for ext in (".jpg",".jpeg",".png",".webp",".gif")):
             return url
 
+    # 3. <img src="..."> inside description CDATA
     m = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', item_xml, re.IGNORECASE)
     if m:
         url = m.group(1).strip()
@@ -532,18 +521,19 @@ def _parse_rss(url: str, limit: int = 10) -> list:
                 m = re.search(rf"<{t}[^>]*>(.*?)</{t}>", item, re.DOTALL)
                 return m.group(1).strip() if m else ""
 
-            # ── FIX: decode title and description to remove &lt;a href=... ──
-            title = _decode_html(tag("title"))
+            title = tag("title")
             link  = tag("link") or tag("guid")
-            desc  = _decode_html(tag("description"))
+            desc  = re.sub(r"<[^>]+>", "", tag("description"))
             pub   = tag("pubDate")
             src_m = re.search(r"<source[^>]*>(.*?)</source>", item, re.DOTALL)
-            src   = _decode_html(src_m.group(1).strip()) if src_m else (
+            src   = src_m.group(1).strip() if src_m else (
                     re.search(r"https?://(?:www\.)?([^/]+)", link or "").group(1)
                     if link else "RSS Feed")
 
+            # ── Image extraction (3 methods) ──
             img = _extract_image(item, link or "")
 
+            # Parse pubDate → ISO
             iso = ""
             for fmt in ("%a, %d %b %Y %H:%M:%S %z", "%a, %d %b %Y %H:%M:%S GMT"):
                 try: iso = datetime.strptime(pub.strip(), fmt).isoformat(); break
@@ -563,83 +553,8 @@ def _parse_rss(url: str, limit: int = 10) -> list:
     except Exception:
         return []
 
-# ── FIX 2: Feed images — use curated RSS feeds (have embedded images) ─────────
-# Google News RSS strips all images and its article URLs are blocked by EC2.
-# Solution: fetch curated publisher feeds (BBC, TechCrunch, etc.) which embed
-# <media:content> images directly in the XML — no extra HTTP calls needed.
-# Then filter articles by keyword match against the search query.
-
-# All publisher feeds combined — used as the search corpus
-ALL_FEEDS = [
-    "http://feeds.bbci.co.uk/news/rss.xml",
-    "http://feeds.bbci.co.uk/news/technology/rss.xml",
-    "http://feeds.bbci.co.uk/news/business/rss.xml",
-    "http://feeds.bbci.co.uk/news/science_and_environment/rss.xml",
-    "http://feeds.bbci.co.uk/news/health/rss.xml",
-    "http://feeds.bbci.co.uk/sport/rss.xml",
-    "http://feeds.bbci.co.uk/news/entertainment_and_arts/rss.xml",
-    "https://feeds.feedburner.com/TechCrunch",
-    "https://www.wired.com/feed/rss",
-    "https://feeds.arstechnica.com/arstechnica/index",
-    "https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml",
-    "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml",
-    "https://rss.nytimes.com/services/xml/rss/nyt/Science.xml",
-    "https://feeds.npr.org/1001/rss.xml",
-    "https://www.sciencedaily.com/rss/top.xml",
-    "https://www.ign.com/articles.rss",
-    "https://variety.com/v/film/feed/",
-]
-
-def _article_matches_query(article: dict, query: str) -> bool:
-    """
-    Check if an article is relevant to the search query.
-    Splits query into words and checks if ANY word appears in title or description.
-    Case-insensitive. Handles multi-word queries like 'Climate Change'.
-    """
-    query_words = [w.lower() for w in query.split() if len(w) > 2]
-    text = (
-        (article.get("title") or "") + " " +
-        (article.get("description") or "")
-    ).lower()
-    # Match if ANY query word is found in the article text
-    return any(w in text for w in query_words)
-
 def _rss_for_query(query: str, lang: str, limit: int) -> list:
-    """
-    Search across curated RSS feeds by keyword matching.
-    These feeds embed images directly in XML — no extra HTTP requests needed.
-    Falls back to Google News RSS if not enough results found.
-    """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    all_articles = []
-    seen = set()
-
-    # Fetch multiple feeds in parallel for speed
-    with ThreadPoolExecutor(max_workers=8) as ex:
-        futs = {ex.submit(_parse_rss, feed, 20): feed for feed in ALL_FEEDS}
-        for f in as_completed(futs):
-            try:
-                for art in f.result():
-                    if art["url"] not in seen:
-                        seen.add(art["url"])
-                        all_articles.append(art)
-            except Exception:
-                pass
-
-    # Filter by keyword relevance to the query
-    matched = [a for a in all_articles if _article_matches_query(a, query)]
-
-    # Sort by date (newest first)
-    def pub_key(a):
-        try: return datetime.fromisoformat(a.get("publishedAt","").replace("Z","+00:00"))
-        except: return datetime.min.replace(tzinfo=timezone.utc)
-    matched.sort(key=pub_key, reverse=True)
-
-    if len(matched) >= 3:
-        return matched[:limit]
-
-    # Fallback: Google News RSS if curated feeds had no matches
+    """Use Google News RSS to search by query — unlimited, no key."""
     return _parse_rss(_google_news_rss(query, lang), limit=limit)
 
 def _rss_for_category(category: str, limit: int) -> list:
@@ -661,7 +576,7 @@ def _api(url, params) -> tuple:
     """Returns (data_or_None, hit_limit: bool)."""
     try:
         r = requests.get(url, params={**params, "apiKey": NEWS_API_KEY}, timeout=10)
-        if r.status_code in (429, 426):
+        if r.status_code in (429, 426):          # rate limited
             return None, True
         if r.status_code == 401:
             body = r.json()
@@ -687,6 +602,7 @@ def _clean(arts):
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def fetch_everything(query, sort_by, page_size, days_back, language="en", page=1):
+    # Try NewsAPI first (unless already known-limited)
     if not _is_limited():
         fd = (datetime.utcnow() - timedelta(days=days_back)).strftime("%Y-%m-%d")
         data, limited = _api(EVERYTHING_EP, {
@@ -698,6 +614,8 @@ def fetch_everything(query, sort_by, page_size, days_back, language="en", page=1
         elif data:
             arts = _clean(data.get("articles", []))
             if arts: return arts
+
+    # RSS fallback
     return _rss_for_query(query, language, page_size)
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
@@ -716,6 +634,8 @@ def fetch_headlines(category, page_size=6):
         elif data:
             arts = _clean(data.get("articles", []))
             if arts: return arts
+
+    # RSS fallback
     return _rss_for_category(category, page_size)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -856,7 +776,7 @@ st.markdown(
     f'<span>Saved {badge}</span>'
     f'</div></div>', unsafe_allow_html=True)
 
-# ② Search bar + Theme toggle
+# ② Search bar + Theme toggle (single clean row, no empty space)
 sc, bc, tc = st.columns([6, 1, 2])
 with sc:
     st.markdown('<p class="sec">Search Topic</p>', unsafe_allow_html=True)
