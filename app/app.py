@@ -373,10 +373,31 @@ def db_count():
 # ─────────────────────────────────────────────────────────────────────────────
 def esc(s): return str(s).replace("&","&amp;").replace("<","&lt;").replace('"','&quot;')
 
+# ── FIX 1: HTML entity decoder — fixes &lt;a href=... showing as raw text ─────
+def _decode_html(text: str) -> str:
+    """Decode HTML entities and strip all tags. Fixes &lt;a href=... in descriptions."""
+    if not text: return ""
+    # Decode named entities
+    text = (text.replace("&lt;","<").replace("&gt;",">").replace("&amp;","&")
+                .replace("&quot;",'"').replace("&#39;","'").replace("&nbsp;"," ")
+                .replace("&mdash;","—").replace("&ndash;","–")
+                .replace("&lsquo;","'").replace("&rsquo;","'")
+                .replace("&ldquo;",'"').replace("&rdquo;",'"'))
+    # Decode numeric entities like &#8216; &#8217; &#8220; &#8221;
+    text = re.sub(r"&#(\d+);",         lambda m: chr(int(m.group(1))),             text)
+    text = re.sub(r"&#x([0-9a-fA-F]+);", lambda m: chr(int(m.group(1), 16)),       text)
+    # Strip all remaining HTML tags (e.g. <a href=...>, <p>, <br>)
+    text = re.sub(r"<[^>]+>", "", text)
+    # Remove any raw URLs that leaked into descriptions
+    text = re.sub(r"https?://\S+", "", text)
+    # Collapse whitespace
+    return re.sub(r"\s+", " ", text).strip()
+
 def summarize(text):
     if not text: return "No description available."
+    text = _decode_html(text)                               # ← decode before displaying
     text = re.sub(r"\s*\[\+\d+ chars\]$","",text).strip()
-    s = [x.strip() for x in re.split(r"(?<=[.!?])\s+",text) if x.strip()]
+    s = [x.strip() for x in re.split(r"(?<=[.!?])\s+",text) if len(x.strip()) > 10]
     return " ".join(s[:2]) or "No description available."
 
 def fmt_date(iso):
@@ -423,7 +444,7 @@ def _mark_limited():
 def _is_limited() -> bool:
     if not st.session_state.api_limited: return False
     if st.session_state.api_limit_until and datetime.utcnow() > st.session_state.api_limit_until:
-        st.session_state.api_limited     = False   # auto-reset after 1 hour
+        st.session_state.api_limited     = False
         st.session_state.api_limit_until = None
         return False
     return True
@@ -465,20 +486,12 @@ RSS_FEEDS = {
                       "https://deadline.com/feed/"],
 }
 
-# Topic → RSS search via Google News RSS (no key)
 def _google_news_rss(query: str, lang: str = "en") -> str:
     q = requests.utils.quote(query)
     return f"https://news.google.com/rss/search?q={q}&hl={lang}&gl=US&ceid=US:{lang}"
 
 def _extract_image(item_xml: str, article_url: str) -> str:
-    """
-    Try 3 methods to find an image for an RSS item:
-      1. media:content or media:thumbnail (most feeds)
-      2. enclosure tag
-      3. <img> inside description HTML
-    Returns image URL string or "".
-    """
-    # 1. media:content / media:thumbnail
+    """Try 3 methods to find an image URL in an RSS item."""
     for pattern in [
         r'<media:content[^>]+url=["\']([^"\']+)["\']',
         r'<media:thumbnail[^>]+url=["\']([^"\']+)["\']',
@@ -489,14 +502,12 @@ def _extract_image(item_xml: str, article_url: str) -> str:
             url = m.group(1).strip().strip('"\'')
             if url.startswith("http"): return url
 
-    # 2. enclosure tag (url attribute)
     m = re.search(r'<enclosure[^>]+url=["\']([^"\']+)["\']', item_xml, re.IGNORECASE)
     if m:
         url = m.group(1).strip()
         if url.startswith("http") and any(ext in url.lower() for ext in (".jpg",".jpeg",".png",".webp",".gif")):
             return url
 
-    # 3. <img src="..."> inside description CDATA
     m = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', item_xml, re.IGNORECASE)
     if m:
         url = m.group(1).strip()
@@ -521,19 +532,18 @@ def _parse_rss(url: str, limit: int = 10) -> list:
                 m = re.search(rf"<{t}[^>]*>(.*?)</{t}>", item, re.DOTALL)
                 return m.group(1).strip() if m else ""
 
-            title = tag("title")
+            # ── FIX: decode title and description to remove &lt;a href=... ──
+            title = _decode_html(tag("title"))
             link  = tag("link") or tag("guid")
-            desc  = re.sub(r"<[^>]+>", "", tag("description"))
+            desc  = _decode_html(tag("description"))
             pub   = tag("pubDate")
             src_m = re.search(r"<source[^>]*>(.*?)</source>", item, re.DOTALL)
-            src   = src_m.group(1).strip() if src_m else (
+            src   = _decode_html(src_m.group(1).strip()) if src_m else (
                     re.search(r"https?://(?:www\.)?([^/]+)", link or "").group(1)
                     if link else "RSS Feed")
 
-            # ── Image extraction (3 methods) ──
             img = _extract_image(item, link or "")
 
-            # Parse pubDate → ISO
             iso = ""
             for fmt in ("%a, %d %b %Y %H:%M:%S %z", "%a, %d %b %Y %H:%M:%S GMT"):
                 try: iso = datetime.strptime(pub.strip(), fmt).isoformat(); break
@@ -553,9 +563,56 @@ def _parse_rss(url: str, limit: int = 10) -> list:
     except Exception:
         return []
 
+# ── FIX 2: og:image fetch for Google News RSS (which strips all images) ───────
+def _resolve_url(url: str) -> str:
+    """Follow redirects to get real article URL (Google News wraps links)."""
+    try:
+        r = requests.head(url, headers={"User-Agent":"Mozilla/5.0"}, timeout=5, allow_redirects=True)
+        return r.url if r.url else url
+    except Exception:
+        return url
+
+def _fetch_og_image(url: str) -> str:
+    """Fetch og:image / twitter:image meta tag from the real article page."""
+    try:
+        real = _resolve_url(url)   # follow Google News redirect first
+        r = requests.get(real, headers={"User-Agent":"Mozilla/5.0"}, timeout=6, allow_redirects=True)
+        if r.status_code != 200: return ""
+        chunk = r.text[:12000]     # only scan first 12KB — meta tags are in <head>
+        for pat in [
+            r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
+            r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
+            r'<meta[^>]+name=["\']twitter:image[^"\']*["\'][^>]+content=["\']([^"\']+)["\']',
+            r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+name=["\']twitter:image["\']',
+        ]:
+            m = re.search(pat, chunk, re.IGNORECASE)
+            if m:
+                img = m.group(1).strip()
+                if img.startswith("http"): return img
+    except Exception:
+        pass
+    return ""
+
+def _enrich_images(articles: list) -> list:
+    """Parallel og:image fetch for articles missing images (6 threads at once)."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    needs  = [i for i, a in enumerate(articles) if not a.get("urlToImage")]
+    if not needs: return articles
+    result = articles[:]
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        futs = {ex.submit(_fetch_og_image, articles[i]["url"]): i for i in needs}
+        for f in as_completed(futs):
+            idx = futs[f]
+            try:
+                img = f.result()
+                if img: result[idx] = {**result[idx], "urlToImage": img}
+            except Exception: pass
+    return result
+
 def _rss_for_query(query: str, lang: str, limit: int) -> list:
-    """Use Google News RSS to search by query — unlimited, no key."""
-    return _parse_rss(_google_news_rss(query, lang), limit=limit)
+    """Google News RSS → parallel og:image enrichment."""
+    arts = _parse_rss(_google_news_rss(query, lang), limit=limit)
+    return _enrich_images(arts)
 
 def _rss_for_category(category: str, limit: int) -> list:
     """Pull from curated RSS feeds for a category."""
@@ -576,7 +633,7 @@ def _api(url, params) -> tuple:
     """Returns (data_or_None, hit_limit: bool)."""
     try:
         r = requests.get(url, params={**params, "apiKey": NEWS_API_KEY}, timeout=10)
-        if r.status_code in (429, 426):          # rate limited
+        if r.status_code in (429, 426):
             return None, True
         if r.status_code == 401:
             body = r.json()
@@ -602,7 +659,6 @@ def _clean(arts):
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def fetch_everything(query, sort_by, page_size, days_back, language="en", page=1):
-    # Try NewsAPI first (unless already known-limited)
     if not _is_limited():
         fd = (datetime.utcnow() - timedelta(days=days_back)).strftime("%Y-%m-%d")
         data, limited = _api(EVERYTHING_EP, {
@@ -614,8 +670,6 @@ def fetch_everything(query, sort_by, page_size, days_back, language="en", page=1
         elif data:
             arts = _clean(data.get("articles", []))
             if arts: return arts
-
-    # RSS fallback
     return _rss_for_query(query, language, page_size)
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
@@ -634,8 +688,6 @@ def fetch_headlines(category, page_size=6):
         elif data:
             arts = _clean(data.get("articles", []))
             if arts: return arts
-
-    # RSS fallback
     return _rss_for_category(category, page_size)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -776,7 +828,7 @@ st.markdown(
     f'<span>Saved {badge}</span>'
     f'</div></div>', unsafe_allow_html=True)
 
-# ② Search bar + Theme toggle (single clean row, no empty space)
+# ② Search bar + Theme toggle
 sc, bc, tc = st.columns([6, 1, 2])
 with sc:
     st.markdown('<p class="sec">Search Topic</p>', unsafe_allow_html=True)
@@ -887,4 +939,3 @@ with tab_saved:
                     f'<div class="stat-chip"><strong>Persistent</strong><span>SQLite</span></div>'
                     f'</div>', unsafe_allow_html=True)
         render_grid(saved, cols=3, pfx="sv")
-
